@@ -22,27 +22,27 @@ main = return ()
 
 -- data ThreadMessage = TM Message deriving (Eq, Show)
 
-newtype Space = S [Room]
+-- newtype Space = S [Room]
 
-data RoomMessage = RM Message Thread deriving (Eq, Show)
+-- data RoomMessage = RM Message Thread deriving (Eq, Show)
 
-data Room = L [RoomMessage] RoomName [Members] deriving (Eq, Show)
+-- data Room = L [RoomMessage] RoomName [Members] deriving (Eq, Show)
 
-data Thread = E | TL [Message] Message deriving (Eq, Show)
+-- data Thread = E | TL [Message] Message deriving (Eq, Show)
 
-data Message = M Sender Content Timestamp
+-- data Message = M Sender Content Timestamp
 
--- data SerializedMessage = {}
+-- -- data SerializedMessage = {}
 
-type Content = String
+-- type Content = String
 
-type Timestamp = Clock.UTCTime
+-- type Timestamp = Clock.UTCTime
 
-type Sender = String
+-- type Sender = String
 
-type RoomName = String
+-- type RoomName = String
 
-newtype Members = Mem [Sender]
+-- newtype Members = Mem [Sender]
 
 -----------------------------
 -- Function Declarations
