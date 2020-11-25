@@ -7,7 +7,7 @@ import qualified Data.Map as Map
 import qualified Data.Maybe
 -- import Data.ProtocolBuffers
 
--- import qualified Data.Time.Clock as Clock
+import qualified Data.Time.Clock as Clock
 import GHC.Generics as Gen
 import Text.PrettyPrint (Doc)
 import qualified Text.PrettyPrint as PP

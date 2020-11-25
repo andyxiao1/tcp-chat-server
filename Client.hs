@@ -11,3 +11,5 @@ import qualified Data.Maybe
 import GHC.Generics as Gen
 import Text.PrettyPrint (Doc)
 import qualified Text.PrettyPrint as PP
+
+-- maintain messages & other simple shared data types
