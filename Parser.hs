@@ -15,8 +15,8 @@ import qualified Text.PrettyPrint as PP
 newtype Parser a = P {doParse :: String -> Maybe (a, String)}
 
 help :: String
-help str = case str of
-  (':' : 'h' : xs) -> undefined -- print out the help menu!
+help = undefined -- case str of
+-- (':' : 'h' : xs) -> undefined -- print out the help menu!
 
 -- stepper :: Block -> IO ()
 -- stepper b = go b Map.empty [] []
