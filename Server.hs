@@ -22,11 +22,11 @@ import qualified Text.PrettyPrint as PP
 
 newtype Space = S [Room]
 
-data RoomMessage = RM Message Thread deriving (Eq, Show)
+data RoomMessage = RM Message Thread
 
-data Room = L [RoomMessage] RoomName [Members] deriving (Eq, Show)
+data Room = L [RoomMessage] RoomName [Members]
 
-data Thread = E | TL [Message] Message deriving (Eq, Show)
+data Thread = E | TL [Message] Message
 
 data Message = M Sender Content Timestamp
 
@@ -44,7 +44,7 @@ type Port = Int
 
 newtype Members = Mem [Sender]
 
-newtype IPv4 = String
+type IPv4 = String
 
 -- is it better to store users in rooms to avoid map lookup?
 -- newtype Users = Map Sender (IPv4, Port)
@@ -124,54 +124,35 @@ sendMsg = undefined
 -- tMsgConversion :: Test
 -- tMsgConversion = undefined
 
-prop_verifySend :: Sender -> String -> Room -> Bool
-prop_verifySend s str rm@(RM (x@(M _ c _) : _) rn mem) = do
-  sendMsgRm s str rm
-  -- get `Message` from `x` which is a `RoomMessage`
-  -- get `Content` from that `Message`
-  c == str
+-- prop_verifySend :: Sender -> String -> Room -> Bool
+-- prop_verifySend s str rm@(RM (x@(M _ c _) : _) rn mem) = do
+--   sendMsgRm s str rm
+--   -- get `Message` from `x` which is a `RoomMessage`
+--   -- get `Content` from that `Message`
+--   c == str
 
 -- case head rms of
 --   RM msg th -> msg == str
 
-network :: String -> MVar Message -> IO ()
-network port mv = do
-  handle <- atom $
-    withSocketsDo $ do
-      putStrLn "Opening a socket."
-      addr <- resolve
-      sock <- open addr
-      (conn, _peer) <- accept sock
-      putStrLn "Connected to socket."
-      socketToHandle conn ReadMode
-  interface
-    mv
-    ( atom $ do
-        x <- hReady handle
-        if x
-          then Just <$> hGetLine handle
-          else return Nothing
-    )
-  atom $ do
-    hClose
-      handle
-      putStrLn
-      "Socket closed."
+main :: IO ()
+main = do
+  putStrLn "What port are you publishing over?"
+  port <- getLine
+  putStrLn "What is your VPN IP address?"
+  ip <- getLine
+  -- create socket
+  (sa : _) <- getAddrInfo Nothing (Just ip) (Just port)
+  sock <- socket (addrFamily sa) Stream defaultProtocol
+  connect sock (addrAddress sa)
+  -- loop
+  loop sock
   where
-    resolve = do
-      let hints =
-            defaultHints
-              { addrFlags = [AI_PASSIVE],
-                addrSocketType = Stream
-              }
-      addrInfos <- getAddrInfo (Just hints) Nothing (Just port)
-      case addrInfos of
-        [] -> error "resolve returned no results"
-        (addrInfo : _) -> return addrInfo
-    open addr = do
-      sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
-      setSocketOption sock ReuseAddr 1
-      withFdSocket sock setCloseOnExecIfNeeded
-      bind sock $ addrAddress addr
-      listen sock 1024
-      return sock
+    loop sock =
+      listen
+        sock
+        1024
+        -- check for new connections + add to current list of members
+        -- move users around if need be
+        -- send messages between users
+        loop
+        sock
