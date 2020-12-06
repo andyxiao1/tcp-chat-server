@@ -20,5 +20,6 @@ library
                      , pretty >= 1.1.3
                      , time >= 1.9.3 
                      , network 
+                     , text >= 1.2.4.0
   default-language:    Haskell2010
   ghc-options:         -Wincomplete-patterns -Wno-orphans -Wno-unused-imports
