@@ -71,7 +71,7 @@ type IPv4 = String
 
 type RoomName = String
 
-data User = U {username :: Username, conn :: Socket}
+data User = U {username :: Username, conn :: Socket} deriving (Eq)
 
 instance Show User where
   show u = show (username u) ++ show (conn u)
@@ -84,7 +84,7 @@ type Store = Map RoomName Room
 
 data Room = R {name :: String, messages :: [Message], users :: [User]}
 
-data Message = M {sender :: User, content :: String} deriving (Show)
+data Message = M {sender :: User, content :: String} deriving (Show, Eq)
 
 emptyStore :: Store
 emptyStore = Map.empty
@@ -159,73 +159,73 @@ sendRoomMessage usr room msg = do
 -- case head rms of
 --   RM msg th -> msg == str
 
-clientThread :: Socket -> IO ()
-clientThread sock = do
-  -- -- get user's name
-  -- sendAll sock "What is your name?"
-  -- name <- recv sock 1024
-  -- -- get room to add user to
-  -- sendAll sock (show getAllRooms)
-  -- sendAll sock "What room would you like to join?"
-  -- rm <- strip (recv sock 1024)
-  -- -- create user
-  -- addUserToRoom name rm
-  msg <- recv sock 1024
-  unless (B.null msg) $ do
-    sendAll sock msg
-    clientThread sock
+-- clientThread :: Socket -> IO ()
+-- clientThread sock = do
+--   -- -- get user's name
+--   -- sendAll sock "What is your name?"
+--   -- name <- recv sock 1024
+--   -- -- get room to add user to
+--   -- sendAll sock (show getAllRooms)
+--   -- sendAll sock "What room would you like to join?"
+--   -- rm <- strip (recv sock 1024)
+--   -- -- create user
+--   -- addUserToRoom name rm
+--   msg <- recv sock 1024
+--   unless (B.null msg) $ do
+--     sendAll sock msg
+--     clientThread sock
 
-network :: IPv4 -> IO ()
-network ip = do
-  withSocketsDo $ do
-    Prelude.putStrLn "Opening a socket."
-    addr <- resolve
-    sock <- open addr
-    (conn, _peer) <- accept sock
-    Prelude.putStrLn "Connected to socket."
-    -- get user's name
-    sendAll sock (pack "What is your name?")
-    name <- recv sock 1024
-    -- get room to add user to
-    sendAll sock (pack (show getAllRooms))
-    sendAll sock (pack "What room would you like to join?")
-    rm <- recv sock 1024
-    -- create user
-    s <- addUserToRoom name (unpack rm)
-    --spawn a new process here
-    -- TODO: how to share state store between processes?
-    forkFinally (clientThread conn) (const $ gracefulClose conn 5000)
-    network ip
-  where
-    -- -- interface
-    -- --   mv
-    -- --   ( atom $ do
-    -- --       x <- hReady handle
-    -- --       if x
-    -- --         then Just <$> hGetLine handle
-    -- --         else return Nothing
-    -- --   )
-    -- atom $ do
-    --   hClose handle
-    --   putStrLn "Socket closed."
+-- network :: IPv4 -> IO ()
+-- network ip = do
+--   withSocketsDo $ do
+--     Prelude.putStrLn "Opening a socket."
+--     addr <- resolve
+--     sock <- open addr
+--     (conn, _peer) <- accept sock
+--     Prelude.putStrLn "Connected to socket."
+--     -- get user's name
+--     sendAll sock (pack "What is your name?")
+--     name <- recv sock 1024
+--     -- get room to add user to
+--     sendAll sock (pack (show getAllRooms))
+--     sendAll sock (pack "What room would you like to join?")
+--     rm <- recv sock 1024
+--     -- create user
+--     s <- addUserToRoom name (unpack rm)
+--     --spawn a new process here
+--     -- TODO: how to share state store between processes?
+--     forkFinally (clientThread conn) (const $ gracefulClose conn 5000)
+--     network ip
+--   where
+--     -- -- interface
+--     -- --   mv
+--     -- --   ( atom $ do
+--     -- --       x <- hReady handle
+--     -- --       if x
+--     -- --         then Just <$> hGetLine handle
+--     -- --         else return Nothing
+--     -- --   )
+--     -- atom $ do
+--     --   hClose handle
+--     --   putStrLn "Socket closed."
 
-    resolve = do
-      let hints =
-            defaultHints
-              { addrFlags = [AI_PASSIVE],
-                addrSocketType = Stream
-              }
-      addrInfos <- getAddrInfo (Just hints) (Just ip) (Just "5000")
-      case addrInfos of
-        [] -> error "resolve returned no results"
-        (addrInfo : _) -> return addrInfo
-    open addr = do
-      sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
-      setSocketOption sock ReuseAddr 1
-      withFdSocket sock setCloseOnExecIfNeeded
-      bind sock $ addrAddress addr
-      listen sock 1024
-      return sock
+--     resolve = do
+--       let hints =
+--             defaultHints
+--               { addrFlags = [AI_PASSIVE],
+--                 addrSocketType = Stream
+--               }
+--       addrInfos <- getAddrInfo (Just hints) (Just ip) (Just "5000")
+--       case addrInfos of
+--         [] -> error "resolve returned no results"
+--         (addrInfo : _) -> return addrInfo
+--     open addr = do
+--       sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
+--       setSocketOption sock ReuseAddr 1
+--       withFdSocket sock setCloseOnExecIfNeeded
+--       bind sock $ addrAddress addr
+--       listen sock 1024
+--       return sock
 
 -- main :: IO ()
 -- main = do
