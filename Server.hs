@@ -21,6 +21,8 @@ import qualified Data.Time.Clock as Clock
 import GHC.Generics as Gen
 import Network.Socket
 import Network.Socket.ByteString (recv, sendAll)
+-- import ParserCombinators (Parser)
+-- import qualified ParserCombinators as P
 import State (State)
 import qualified State as S
 import Text.PrettyPrint (Doc)
@@ -69,7 +71,10 @@ type IPv4 = String
 
 type RoomName = String
 
-type User = String
+data User = U {username :: Username, conn :: Socket}
+
+instance Show User where
+  show u = show (username u) ++ show (conn u)
 
 type Username = String
 
@@ -112,7 +117,7 @@ addUserToRoom usr room = do
   S.put (Map.adjust updateRoom room store)
   where
     updateRoom rm@(R name messages users) =
-      if usr `elem` users
+      if usr `Prelude.elem` users
         then rm
         else R name messages (usr : users)
 
@@ -126,13 +131,14 @@ switchUserBetweenRooms usr r1 r2 = do
   removeUserFromRoom usr r1
   addUserToRoom usr r2
 
+-- TODO this function should also send messages to the connections associated with users
 sendRoomMessage :: User -> RoomName -> MessageContent -> State Store ()
 sendRoomMessage usr room msg = do
   store <- S.get
   S.put (Map.adjust updateRoom room store)
   where
     updateRoom rm@(R name messages users) =
-      if usr `notElem` users
+      if usr `Prelude.notElem` users
         then rm
         else R name (M usr msg : messages) users
 
@@ -153,18 +159,41 @@ sendRoomMessage usr room msg = do
 -- case head rms of
 --   RM msg th -> msg == str
 
-clientThread :: Socket -> IO a
-clientThread sock = undefined
+clientThread :: Socket -> IO ()
+clientThread sock = do
+  -- -- get user's name
+  -- sendAll sock "What is your name?"
+  -- name <- recv sock 1024
+  -- -- get room to add user to
+  -- sendAll sock (show getAllRooms)
+  -- sendAll sock "What room would you like to join?"
+  -- rm <- strip (recv sock 1024)
+  -- -- create user
+  -- addUserToRoom name rm
+  msg <- recv sock 1024
+  unless (B.null msg) $ do
+    sendAll sock msg
+    clientThread sock
 
 network :: IPv4 -> IO ()
 network ip = do
   withSocketsDo $ do
-    putStrLn "Opening a socket."
+    Prelude.putStrLn "Opening a socket."
     addr <- resolve
     sock <- open addr
     (conn, _peer) <- accept sock
-    putStrLn "Connected to socket."
+    Prelude.putStrLn "Connected to socket."
+    -- get user's name
+    sendAll sock (pack "What is your name?")
+    name <- recv sock 1024
+    -- get room to add user to
+    sendAll sock (pack (show getAllRooms))
+    sendAll sock (pack "What room would you like to join?")
+    rm <- recv sock 1024
+    -- create user
+    s <- addUserToRoom name (unpack rm)
     --spawn a new process here
+    -- TODO: how to share state store between processes?
     forkFinally (clientThread conn) (const $ gracefulClose conn 5000)
     network ip
   where
@@ -200,8 +229,8 @@ network ip = do
 
 -- main :: IO ()
 -- main = do
---   putStrLn "What is your VPN IP address?"
---   ip <- getLine
+--   Prelude.putStrLn "What is your VPN IP address?"
+--   ip <- Prelude.getLine
 --   -- create socket
 --   (sa : _) <- getAddrInfo Nothing (Just ip) (Just "5000")
 --   sock <- socket (addrFamily sa) Stream defaultProtocol
