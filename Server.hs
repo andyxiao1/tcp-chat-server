@@ -31,7 +31,7 @@ type Response = String
 
 type RoomStore = Map RoomName Room
 
-type UserStore = Map User (TChan Message)
+type UserStore = Map User (TChan Message, RoomName)
 
 type ServerState = TVar (RoomStore, UserStore)
 
@@ -64,7 +64,14 @@ getUserChannel state user = do
   (_, userStore) <- readTVar state
   case Map.lookup user userStore of
     Nothing -> error $ "error: " ++ user ++ " has no channel."
-    Just tchan -> return tchan
+    Just (tchan, _) -> return tchan
+
+getUserRoom :: ServerState -> User -> STM RoomName
+getUserRoom state user = do
+  (_, userStore) <- readTVar state
+  case Map.lookup user userStore of
+    Nothing -> error $ "error: " ++ user ++ " has no channel."
+    Just (_, room) -> return room
 
 createRoom :: ServerState -> RoomName -> STM [Response]
 createRoom state roomName = do
@@ -85,7 +92,7 @@ addUserToRoom state usr roomName = do
     Just room -> do
       commLine <- dupTChan $ channel room
       let newRoomStore = Map.insert roomName (updateRoom room) roomStore
-          newUserStore = Map.insert usr commLine userStore
+          newUserStore = Map.insert usr (commLine, roomName) userStore
       writeTVar state (newRoomStore, newUserStore)
       getAllRoomMessages state roomName
   where
@@ -128,8 +135,9 @@ sendRoomMessage state usr roomName msg = do
 --   addUserToRoom usr r2
 
 -- | Handles client input.
-handleInput :: ServerState -> User -> RoomName -> MessageContent -> STM [Response]
-handleInput state usr roomName msg =
+handleInput :: ServerState -> User -> MessageContent -> STM [Response]
+handleInput state usr msg = do
+  roomName <- getUserRoom state usr
   case T.unpack (T.strip (T.pack msg)) of
     ':' : command -> case command of
       -- create room
@@ -217,7 +225,7 @@ clientLoop clientSock clientAddr state = do
     case msg of
       ":q" -> sendMsg "Bye!"
       _ -> do
-        responses <- atomically $ handleInput state user room msg
+        responses <- atomically $ handleInput state user msg
         sendResponses responses
         loop
 
