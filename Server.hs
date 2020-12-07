@@ -1,69 +1,21 @@
 module Server where
 
-import Control.Applicative (Alternative (..), liftA3)
--- import Data.ProtocolBuffers
-
 import Control.Concurrent
+import Control.Concurrent.STM
 import Control.Monad (forever, unless)
--- import ParserCombinators (Parser)
--- import qualified ParserCombinators as P
-
 import Control.Monad.Fix (fix)
-import qualified Data.ByteString as B
-import Data.ByteString.Char8 (pack, unpack)
-import Data.IORef
-import Data.List (delete)
+import qualified Data.ByteString.Char8 as C
 import Data.Map (Map)
 import qualified Data.Map as Map
-import qualified Data.Maybe
-import Data.Text (strip)
-import qualified Data.Time.Clock as Clock
-import GHC.Generics as Gen
+import qualified Data.Text as T
 import Network.Socket
 import Network.Socket.ByteString (recv, sendAll)
+
 -- import ParserCombinators (Parser)
 -- import qualified ParserCombinators as P
-import State (State)
-import qualified State as S
-import Text.PrettyPrint (Doc)
-import qualified Text.PrettyPrint as PP
-
--- -----------------------------
--- -- Type Definitions (Model)
--- -----------------------------
-
--- -- data ThreadMessage = TM Message deriving (Eq, Show)
-
--- newtype Space = S [Room]
-
--- data RoomMessage = RM Message Thread
-
--- data Room = L [RoomMessage] RoomName [Members]
-
--- data Thread = E | TL [Message] Message
-
--- data Message = M Sender Content Timestamp
-
--- -- data SerializedMessage = {}
-
--- type Content = String
-
--- type Timestamp = Clock.UTCTime
-
--- type Sender = String
-
--- type RoomName = String
-
--- type Port = Int
-
--- newtype Members = Mem [Sender]
-
-type IPv4 = String
-
--- type Store = Map RoomName Room
-
--- -- is it better to store users in rooms to avoid map lookup?
--- -- newtype Users = Map Sender (IPv4, Port)
+-- import Text.PrettyPrint (Doc)
+-- import qualified Text.PrettyPrint as PP
+-- import qualified Data.Time.Clock as Clock
 
 -----------------------------
 -- Type Definitions (Model)
@@ -71,185 +23,126 @@ type IPv4 = String
 
 type RoomName = String
 
-data User = U {username :: Username, conn :: Socket} deriving (Eq)
-
-instance Show User where
-  show u = show (username u) ++ show (conn u)
-
-type Username = String
+type User = String
 
 type MessageContent = String
 
-type Store = Map RoomName Room
+type Response = String
 
-data Room = R {name :: String, messages :: [Message], users :: [User]}
+type RoomStore = Map RoomName Room
 
-data Message = M {sender :: User, content :: String} deriving (Show, Eq)
+type UserStore = Map User (TChan Message)
 
-emptyStore :: Store
-emptyStore = Map.empty
+type ServerState = TVar (RoomStore, UserStore)
+
+data Room = R {name :: String, messages :: [Message], users :: [User], channel :: TChan Message}
+
+data Message = M {sender :: User, content :: String} deriving (Eq)
+
+instance Show Message where
+  show msg = sender msg ++ ": " ++ content msg
+
+emptyStore :: (RoomStore, UserStore)
+emptyStore = (Map.empty, Map.empty)
 
 -----------------------------
 -- Function Declarations
 -----------------------------
 
-getAllRooms :: Store -> [RoomName]
-getAllRooms = Map.keys
+getAllRooms :: ServerState -> STM [RoomName]
+getAllRooms state = do
+  (roomStore, _) <- readTVar state
+  return $ Map.keys roomStore
 
-getAllRoomMessages :: Store -> RoomName -> [Message]
-getAllRoomMessages store room = case Map.lookup room store of
-  Nothing -> []
-  Just (R _ messages _) -> messages
+getAllRoomMessages :: ServerState -> RoomName -> STM [String]
+getAllRoomMessages state room = do
+  (roomStore, _) <- readTVar state
+  return $ maybe [] (fmap show . messages) (Map.lookup room roomStore)
 
-createRoom :: RoomName -> State Store ()
-createRoom r = do
-  store <- S.get
-  S.put (Map.insert r (R r [] []) store)
+getUserChannel :: ServerState -> User -> STM (TChan Message)
+getUserChannel state user = do
+  (_, userStore) <- readTVar state
+  case Map.lookup user userStore of
+    Nothing -> error $ "error: " ++ user ++ " has no channel."
+    Just tchan -> return tchan
 
-deleteRoom :: RoomName -> State Store ()
-deleteRoom r = do
-  store <- S.get
-  S.put (Map.delete r store)
+createRoom :: ServerState -> RoomName -> STM [Response]
+createRoom state roomName = do
+  (roomStore, userStore) <- readTVar state
+  -- TODO: check if room already exists + chan is a memory leak because nothing reads it.
+  tchan <- newTChan
+  let newRoom = R roomName [] [] tchan
+  writeTVar state (Map.insert roomName newRoom roomStore, userStore)
+  return []
 
-addUserToRoom :: User -> RoomName -> State Store ()
-addUserToRoom usr room = do
-  store <- S.get
-  S.put (Map.adjust updateRoom room store)
+-- | Add user to room user list and set the user's channel to a duplicate of the rooms channel.
+-- TODO: check if room doesn't exists or if user is already in room (maybe don't need).
+addUserToRoom :: ServerState -> User -> RoomName -> STM [Response]
+addUserToRoom state usr roomName = do
+  (roomStore, userStore) <- readTVar state
+  case Map.lookup roomName roomStore of
+    Nothing -> return []
+    Just room -> do
+      commLine <- dupTChan $ channel room
+      let newRoomStore = Map.insert roomName (updateRoom room) roomStore
+          newUserStore = Map.insert usr commLine userStore
+      writeTVar state (newRoomStore, newUserStore)
+      getAllRoomMessages state roomName
   where
-    updateRoom rm@(R name messages users) =
-      if usr `Prelude.elem` users
+    updateRoom rm@(R name messages users channel) =
+      if usr `elem` users
         then rm
-        else R name messages (usr : users)
+        else R name messages (usr : users) channel
 
-removeUserFromRoom :: User -> RoomName -> State Store ()
-removeUserFromRoom usr room = do
-  store <- S.get
-  S.put (Map.adjust (\(R name messages users) -> R name messages (delete usr users)) room store)
-
-switchUserBetweenRooms :: User -> RoomName -> RoomName -> State Store ()
-switchUserBetweenRooms usr r1 r2 = do
-  removeUserFromRoom usr r1
-  addUserToRoom usr r2
-
+-- | Add message to room message list and room channel.
 -- TODO this function should also send messages to the connections associated with users
-sendRoomMessage :: User -> RoomName -> MessageContent -> State Store ()
-sendRoomMessage usr room msg = do
-  store <- S.get
-  S.put (Map.adjust updateRoom room store)
-  where
-    updateRoom rm@(R name messages users) =
-      if usr `Prelude.notElem` users
-        then rm
-        else R name (M usr msg : messages) users
+sendRoomMessage :: ServerState -> User -> RoomName -> MessageContent -> STM [Response]
+sendRoomMessage state usr roomName msg = do
+  (roomStore, userStore) <- readTVar state
+  case Map.lookup roomName roomStore of
+    Nothing -> return []
+    Just (R name messages users channel) -> do
+      let message = M usr msg
+          newRoom = R name (messages ++ [message]) users channel
+          newRoomStore = Map.insert roomName newRoom roomStore
+      writeTChan channel message
+      writeTVar state (newRoomStore, userStore)
+      return []
 
------------------------------
--- Test Cases
------------------------------
+-- TODO: implement delete room (do we need to?)
+-- deleteRoom :: RoomName -> State Store ()
+-- deleteRoom r = do
+--   store <- S.get
+--   S.put (Map.delete r store)
 
--- tMsgConversion :: Test
--- tMsgConversion = undefined
+-- TODO: implement removeUserFromRoom.
+-- removeUserFromRoom :: User -> RoomName -> State Store ()
+-- removeUserFromRoom usr room = do
+--   store <- S.get
+--   S.put (Map.adjust (\(R name messages users _) -> R name messages (delete usr users)) room store)
 
--- prop_verifySend :: Sender -> String -> Room -> Bool
--- prop_verifySend s str rm@(RM (x@(M _ c _) : _) rn mem) = do
---   sendMsgRm s str rm
---   -- get `Message` from `x` which is a `RoomMessage`
---   -- get `Content` from that `Message`
---   c == str
+-- TODO: implement switchUserBetweenRooms.
+-- switchUserBetweenRooms :: User -> RoomName -> RoomName -> State Store ()
+-- switchUserBetweenRooms usr r1 r2 = do
+--   removeUserFromRoom usr r1
+--   addUserToRoom usr r2
 
--- case head rms of
---   RM msg th -> msg == str
-
--- clientThread :: Socket -> IO ()
--- clientThread sock = do
---   -- -- get user's name
---   -- sendAll sock "What is your name?"
---   -- name <- recv sock 1024
---   -- -- get room to add user to
---   -- sendAll sock (show getAllRooms)
---   -- sendAll sock "What room would you like to join?"
---   -- rm <- strip (recv sock 1024)
---   -- -- create user
---   -- addUserToRoom name rm
---   msg <- recv sock 1024
---   unless (B.null msg) $ do
---     sendAll sock msg
---     clientThread sock
-
--- network :: IPv4 -> IO ()
--- network ip = do
---   withSocketsDo $ do
---     Prelude.putStrLn "Opening a socket."
---     addr <- resolve
---     sock <- open addr
---     (conn, _peer) <- accept sock
---     Prelude.putStrLn "Connected to socket."
---     -- get user's name
---     sendAll sock (pack "What is your name?")
---     name <- recv sock 1024
---     -- get room to add user to
---     sendAll sock (pack (show getAllRooms))
---     sendAll sock (pack "What room would you like to join?")
---     rm <- recv sock 1024
---     -- create user
---     s <- addUserToRoom name (unpack rm)
---     --spawn a new process here
---     -- TODO: how to share state store between processes?
---     forkFinally (clientThread conn) (const $ gracefulClose conn 5000)
---     network ip
---   where
---     -- -- interface
---     -- --   mv
---     -- --   ( atom $ do
---     -- --       x <- hReady handle
---     -- --       if x
---     -- --         then Just <$> hGetLine handle
---     -- --         else return Nothing
---     -- --   )
---     -- atom $ do
---     --   hClose handle
---     --   putStrLn "Socket closed."
-
---     resolve = do
---       let hints =
---             defaultHints
---               { addrFlags = [AI_PASSIVE],
---                 addrSocketType = Stream
---               }
---       addrInfos <- getAddrInfo (Just hints) (Just ip) (Just "5000")
---       case addrInfos of
---         [] -> error "resolve returned no results"
---         (addrInfo : _) -> return addrInfo
---     open addr = do
---       sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
---       setSocketOption sock ReuseAddr 1
---       withFdSocket sock setCloseOnExecIfNeeded
---       bind sock $ addrAddress addr
---       listen sock 1024
---       return sock
-
--- main :: IO ()
--- main = do
---   Prelude.putStrLn "What is your VPN IP address?"
---   ip <- Prelude.getLine
---   -- create socket
---   (sa : _) <- getAddrInfo Nothing (Just ip) (Just "5000")
---   sock <- socket (addrFamily sa) Stream defaultProtocol
---   connect sock (addrAddress sa)
---   listen sock 1024
-
--- loop
-
-data Action
-  = GetAllRooms
-  | GetAllRoomMessages RoomName
-  | CreateRoom RoomName
-  | -- | DeleteRoom RoomName
-    AddUserToRoom Username RoomName
-  | SwitchUserBetweenRooms Username RoomName RoomName
-  | SendRoomMessage Username RoomName MessageContent
-  deriving (Eq, Show)
-
--- actionParser :: Parser Action
+-- | Handles client input.
+handleInput :: ServerState -> User -> RoomName -> MessageContent -> STM [Response]
+handleInput state usr roomName msg =
+  case T.unpack (T.strip (T.pack msg)) of
+    ':' : command -> case command of
+      -- create room
+      'n' : ' ' : rm -> createRoom state rm
+      -- switch room
+      -- 's' : ' ' : rm -> switchUserBetweenRooms state usr roomName rm
+      's' : ' ' : rm -> addUserToRoom state usr rm -- TODO: temporary replace after implementing `switchUserBetweenRooms`
+      -- see all rooms
+      "g" -> getAllRooms state
+      -- unknown command
+      _ -> return []
+    -- send message to room
+    message -> sendRoomMessage state usr roomName message
 
 -- | Takes in ip address and creates + sets up the socket that listens for new connections.
 setupConnSocket :: HostName -> IO Socket
@@ -279,50 +172,83 @@ setupConnSocket ip = do
       return sock
 
 -- | Loop that waits for new connection requests and spawns a new thread for each new connection.
-connLoop :: Socket -> Chan Msg -> IO ()
-connLoop connSock chan = forever $ do
+connLoop :: Socket -> ServerState -> IO ()
+connLoop connSock state = forever $ do
   (clientSock, clientAddr) <- accept connSock
-  forkFinally (clientLoop clientSock clientAddr chan) (const $ gracefulClose clientSock 5000)
+  forkFinally (clientLoop clientSock clientAddr state) (const $ gracefulClose clientSock 5000)
 
 -- | Loop that handles a single client.
-clientLoop :: Socket -> SockAddr -> Chan Msg -> IO ()
-clientLoop clientSock clientAddr chan = do
-  putStrLn "Connected to client."
-  let broadcast msg = writeChan chan msg
+clientLoop :: Socket -> SockAddr -> ServerState -> IO ()
+clientLoop clientSock clientAddr state = do
+  putStrLn $ "Connected to client: " ++ show clientAddr
+  let sendMsg msg = sendAll clientSock $ C.pack msg
+      recvMsg = do
+        byteStr <- recv clientSock 1024
+        return $ C.unpack byteStr
+      sendResponses [] = return ()
+      sendResponses (resp : xs) = do
+        sendMsg $ resp ++ "\n"
+        sendResponses xs
 
-  sendAll clientSock $ pack "What is your name?"
-  nameBS <- recv clientSock 1024
-  let name = unpack nameBS
+  -- Get user name.
+  sendMsg "What is your name?"
+  user <- recvMsg
 
-  broadcast ("--> " ++ name ++ " entered chat.")
-  commLine <- dupChan chan
+  -- Ask user to join room initially.
+  sendMsg "What room would you like to join?"
+  room <- recvMsg
 
-  -- thread to listen for new messages from the channel.
+  responses <- atomically $ addUserToRoom state user room
+  sendResponses responses
+
+  -- Thread to listen for new messages from the user's channel.
   reader <- forkIO $
     forever $ do
-      nextMessage <- readChan commLine
-      sendAll clientSock $ pack nextMessage
+      commLine <- atomically $ getUserChannel state user
+      isEmpty <- atomically $ isEmptyTChan commLine
+      -- Only read from channel if not empty, then send message to client.
+      unless isEmpty $ do
+        nextMessage <- atomically $ readTChan commLine
+        sendMsg $ show nextMessage
 
-  -- thread to listen for messages from the client.
+  -- Thread to listen for messages from the client.
   fix $ \loop -> do
-    msgBS <- recv clientSock 1024
-    let msg = unpack msgBS
+    msg <- recvMsg
     case msg of
-      "q" -> sendAll clientSock $ pack "Bye!"
+      ":q" -> sendMsg "Bye!"
       _ -> do
-        broadcast (name ++ ": " ++ msg)
+        responses <- atomically $ handleInput state user room msg
+        sendResponses responses
         loop
 
   killThread reader
-  broadcast ("<-- " ++ name ++ " left.")
 
--- type Msg = (Int, String)
-type Msg = String
+-- let broadcast msg = writeChan chan msg
+-- broadcast ("--> " ++ name ++ " entered chat.")
+-- broadcast ("<-- " ++ name ++ " left.")
 
 main :: IO ()
 main = do
   putStrLn "What is your VPN IP address?"
   ip <- getLine
   connSocket <- setupConnSocket ip
-  chan <- newChan
-  connLoop connSocket chan
+  state <- newTVarIO emptyStore
+  atomically $ createRoom state "base"
+  connLoop connSocket state
+
+-- TODO: Create `Action` parser. Maybe we don't need anymore?
+-- data Action
+--   = GetAllRooms
+--   | GetAllRoomMessages RoomName
+--   | CreateRoom RoomName
+--   | -- | DeleteRoom RoomName
+--     AddUserToRoom User RoomName
+--   | SwitchUserBetweenRooms User RoomName RoomName
+--   | SendRoomMessage User RoomName MessageContent
+--   deriving (Eq, Show)
+-- actionParser :: Parser Action
+
+-----------------------------
+-- Test Cases
+-----------------------------
+-- TODO: Add test cases.

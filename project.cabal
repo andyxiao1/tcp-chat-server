@@ -22,5 +22,6 @@ library
                      , network
                      , text >= 1.2.4.0
                      , bytestring >= 0.10.10.0
+                     , stm>=2.5.0.0
   default-language:    Haskell2010
   ghc-options:         -Wincomplete-patterns -Wno-orphans -Wno-unused-imports

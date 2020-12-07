@@ -8,8 +8,6 @@ import Control.Monad (liftM, liftM2, liftM3)
 import Data.Either (isLeft)
 import Data.Map (Map)
 import qualified Data.Map as Map
-import State (State)
-import qualified State as S
 import Test.HUnit (Assertion, Test (..), assert, runTestTT, (~:), (~?=))
 import Test.QuickCheck
   ( Arbitrary (..),

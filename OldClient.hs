@@ -1,17 +1,37 @@
 module Client where
 
+import Control.Applicative (Alternative (..), liftA3)
+-- import Data.ProtocolBuffers
+
+-- import qualified Data.Time.Clock as Clock
+-- import Network.Info as Info
+
 import Control.Concurrent
 import Control.Monad (forever, unless)
 import Control.Monad.Fix (fix)
 import qualified Data.ByteString.Char8 as C
-import qualified Data.Text as T
+import Data.IORef
+import Data.Map (Map)
+import qualified Data.Map as Map
+import qualified Data.Maybe
+import Data.Text (pack, strip, unpack)
 import Network.Socket
+import Network.Socket hiding (send)
 import Network.Socket.ByteString (recv, sendAll)
 import System.IO
+  ( BufferMode (BlockBuffering),
+    Handle,
+    IOMode (WriteMode),
+    hFlush,
+    hPutStrLn,
+    hSetBuffering,
+  )
+import Text.PrettyPrint (Doc)
+import qualified Text.PrettyPrint as PP
 
------------------------------
--- Function Declarations
------------------------------
+-- maintain messages & other simple shared data types
+
+-- Functions
 
 client :: IO Handle
 client = do
@@ -80,7 +100,7 @@ send h c = do
 
 createAction :: User -> RoomName -> MessageContent -> Action
 createAction u r m =
-  case T.unpack (T.strip (T.pack m)) of
+  case unpack (strip (pack m)) of
     ':' : command -> case command of
       -- create room
       'n' : ' ' : rm -> CreateRoom rm
@@ -130,13 +150,13 @@ clientLoop serverSock = do
   fix $ \loop -> do
     msg <- getLine
     sendAll serverSock $ C.pack msg
-    unless (msg == ":q") loop
+    unless (msg == "q") loop
 
   killThread reader
 
 main :: IO ()
 main = do
-  putStrLn "What is the server host name?"
+  putStrLn "What is server host name?"
   host <- getLine
   serverSock <- setupServerSocket host "5000"
   clientLoop serverSock
