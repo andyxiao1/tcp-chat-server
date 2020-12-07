@@ -1,18 +1,23 @@
 module Client where
 
 import Control.Applicative (Alternative (..), liftA3)
-import Control.Monad ()
-import Data.IORef
-import Data.Map (Map)
-import qualified Data.Map as Map
-import qualified Data.Maybe
 -- import Data.ProtocolBuffers
 
 -- import qualified Data.Time.Clock as Clock
 -- import Network.Info as Info
 
+import Control.Concurrent
+import Control.Monad (forever, unless)
+import Control.Monad.Fix (fix)
+import qualified Data.ByteString.Char8 as C
+import Data.IORef
+import Data.Map (Map)
+import qualified Data.Map as Map
+import qualified Data.Maybe
 import Data.Text (pack, strip, unpack)
+import Network.Socket
 import Network.Socket hiding (send)
+import Network.Socket.ByteString (recv, sendAll)
 import System.IO
   ( BufferMode (BlockBuffering),
     Handle,
@@ -113,3 +118,50 @@ createAction u r m =
       _ -> undefined -- putStrLn "?" >> go store
       -- send message to room
     msg -> SendRoomMessage u r msg
+
+setupServerSocket :: HostName -> ServiceName -> IO Socket
+setupServerSocket host port = do
+  putStrLn "Opening connection to server..."
+  addr <- getAddr
+  serverSock <- openSocket addr
+  putStrLn "Connected to server."
+  return serverSock
+  where
+    getAddr = do
+      let hints = defaultHints {addrSocketType = Stream}
+      addrInfos <- getAddrInfo (Just hints) (Just host) (Just port)
+      case addrInfos of
+        [] -> error "Error getting address"
+        (addrInfo : _) -> return addrInfo
+    openSocket addr = do
+      sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
+      connect sock $ addrAddress addr
+      return sock
+
+clientLoop :: Socket -> IO ()
+clientLoop serverSock = do
+  -- thread for liestining to messages from the server.
+  reader <- forkIO $
+    forever $ do
+      nextLine <- recv serverSock 1024
+      C.putStrLn nextLine
+
+  -- thread to listen for user input to send to the server.
+  fix $ \loop -> do
+    msg <- getLine
+    sendAll serverSock $ C.pack msg
+    unless (msg == "q") loop
+
+  killThread reader
+
+-- thread for listening to messages and printing
+-- thread for listening for input and sending
+
+main :: IO ()
+main = do
+  putStrLn "What is server host name?"
+  host <- getLine
+  putStrLn "What is server port?"
+  port <- getLine
+  serverSock <- setupServerSocket host port
+  clientLoop serverSock

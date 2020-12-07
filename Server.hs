@@ -4,17 +4,23 @@ import Control.Applicative (Alternative (..), liftA3)
 -- import Data.ProtocolBuffers
 
 import Control.Concurrent
-import Control.Monad ()
+import Control.Monad (forever, unless)
+-- import ParserCombinators (Parser)
+-- import qualified ParserCombinators as P
+
+import Control.Monad.Fix (fix)
+import qualified Data.ByteString as B
+import Data.ByteString.Char8 (pack, unpack)
 import Data.IORef
 import Data.List (delete)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import qualified Data.Maybe
+import Data.Text (strip)
 import qualified Data.Time.Clock as Clock
 import GHC.Generics as Gen
 import Network.Socket
-import ParserCombinators (Parser)
-import qualified ParserCombinators as P
+import Network.Socket.ByteString (recv, sendAll)
 import State (State)
 import qualified State as S
 import Text.PrettyPrint (Doc)
@@ -192,15 +198,15 @@ network ip = do
       listen sock 1024
       return sock
 
-main :: IO ()
-main = do
-  putStrLn "What is your VPN IP address?"
-  ip <- getLine
-  -- create socket
-  (sa : _) <- getAddrInfo Nothing (Just ip) (Just "5000")
-  sock <- socket (addrFamily sa) Stream defaultProtocol
-  connect sock (addrAddress sa)
-  listen sock 1024
+-- main :: IO ()
+-- main = do
+--   putStrLn "What is your VPN IP address?"
+--   ip <- getLine
+--   -- create socket
+--   (sa : _) <- getAddrInfo Nothing (Just ip) (Just "5000")
+--   sock <- socket (addrFamily sa) Stream defaultProtocol
+--   connect sock (addrAddress sa)
+--   listen sock 1024
 
 -- loop
 
@@ -215,3 +221,79 @@ data Action
   deriving (Eq, Show)
 
 -- actionParser :: Parser Action
+
+-- | Takes in ip address and creates + sets up the socket that listens for new connections.
+setupConnSocket :: HostName -> IO Socket
+setupConnSocket ip = do
+  putStrLn "Opening connection socket..."
+  addr <- getAddr
+  connSock <- openSocket addr
+  putStrLn "Connection socket has been setup."
+  return connSock
+  where
+    getAddr = do
+      let hints =
+            defaultHints
+              { addrFlags = [AI_PASSIVE],
+                addrSocketType = Stream
+              }
+      addrInfos <- getAddrInfo (Just hints) (Just ip) (Just "5000")
+      case addrInfos of
+        [] -> error "Error getting address"
+        (addrInfo : _) -> return addrInfo
+    openSocket addr = do
+      sock <- socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
+      setSocketOption sock ReuseAddr 1
+      withFdSocket sock setCloseOnExecIfNeeded
+      bind sock $ addrAddress addr
+      listen sock 1024
+      return sock
+
+-- | Loop that waits for new connection requests and spawns a new thread for each new connection.
+connLoop :: Socket -> Chan Msg -> IO ()
+connLoop connSock chan = forever $ do
+  (clientSock, clientAddr) <- accept connSock
+  forkFinally (clientLoop clientSock clientAddr chan) (const $ gracefulClose clientSock 5000)
+
+-- | Loop that handles a single client.
+clientLoop :: Socket -> SockAddr -> Chan Msg -> IO ()
+clientLoop clientSock clientAddr chan = do
+  putStrLn "Connected to client."
+  let broadcast msg = writeChan chan msg
+
+  sendAll clientSock $ pack "What is your name?"
+  nameBS <- recv clientSock 1024
+  let name = unpack nameBS
+
+  broadcast ("--> " ++ name ++ " entered chat.")
+  commLine <- dupChan chan
+
+  -- thread to listen for new messages from the channel.
+  reader <- forkIO $
+    forever $ do
+      nextMessage <- readChan commLine
+      sendAll clientSock $ pack nextMessage
+
+  -- thread to listen for messages from the client.
+  fix $ \loop -> do
+    msgBS <- recv clientSock 1024
+    let msg = unpack msgBS
+    case msg of
+      "q" -> sendAll clientSock $ pack "Bye!"
+      _ -> do
+        broadcast (name ++ ": " ++ msg)
+        loop
+
+  killThread reader
+  broadcast ("<-- " ++ name ++ " left.")
+
+-- type Msg = (Int, String)
+type Msg = String
+
+main :: IO ()
+main = do
+  putStrLn "What is your VPN IP address?"
+  ip <- getLine
+  connSocket <- setupConnSocket ip
+  chan <- newChan
+  connLoop connSocket chan
