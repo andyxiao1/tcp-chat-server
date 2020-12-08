@@ -5,6 +5,7 @@ import Control.Concurrent.STM
 import Control.Monad (forever, unless)
 import Control.Monad.Fix (fix)
 import qualified Data.ByteString.Char8 as C
+import Data.List (isPrefixOf)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import qualified Data.Text as T
@@ -116,24 +117,6 @@ sendRoomMessage state usr roomName msg = do
       writeTVar state (newRoomStore, userStore)
       return []
 
--- TODO: implement delete room (do we need to?)
--- deleteRoom :: RoomName -> State Store ()
--- deleteRoom r = do
---   store <- S.get
---   S.put (Map.delete r store)
-
--- TODO: implement removeUserFromRoom.
--- removeUserFromRoom :: User -> RoomName -> State Store ()
--- removeUserFromRoom usr room = do
---   store <- S.get
---   S.put (Map.adjust (\(R name messages users _) -> R name messages (delete usr users)) room store)
-
--- TODO: implement switchUserBetweenRooms.
--- switchUserBetweenRooms :: User -> RoomName -> RoomName -> State Store ()
--- switchUserBetweenRooms usr r1 r2 = do
---   removeUserFromRoom usr r1
---   addUserToRoom usr r2
-
 -- | Handles client input.
 handleInput :: ServerState -> User -> MessageContent -> STM [Response]
 handleInput state usr msg = do
@@ -193,10 +176,13 @@ clientLoop clientSock clientAddr state = do
       recvMsg = do
         byteStr <- recv clientSock 1024
         return $ C.unpack byteStr
-      sendResponses [] = return ()
-      sendResponses (resp : xs) = do
-        sendMsg $ resp ++ "\n"
-        sendResponses xs
+      sendResponses _ [] = return ()
+      sendResponses user (resp : xs) = do
+        if user `isPrefixOf` resp
+          then sendResponses user xs
+          else do
+            sendMsg $ resp ++ "\n"
+            sendResponses user xs
 
   -- Get user name.
   sendMsg "What is your name?"
@@ -206,8 +192,11 @@ clientLoop clientSock clientAddr state = do
   sendMsg "What room would you like to join?"
   room <- recvMsg
 
+  -- clear the client's screen
+  sendMsg "clear"
+
   responses <- atomically $ addUserToRoom state user room
-  sendResponses responses
+  sendResponses user responses
 
   -- Thread to listen for new messages from the user's channel.
   reader <- forkIO $
@@ -224,9 +213,14 @@ clientLoop clientSock clientAddr state = do
     msg <- recvMsg
     case msg of
       ":q" -> sendMsg "Bye!"
+      ':' : 's' : _ -> do
+        sendMsg "clear"
+        responses <- atomically $ handleInput state user msg
+        sendResponses user responses
+        loop
       _ -> do
         responses <- atomically $ handleInput state user msg
-        sendResponses responses
+        sendResponses user responses
         loop
 
   killThread reader
