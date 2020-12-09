@@ -73,8 +73,8 @@ clientLoop serverSock = do
   -- Thread to listen for user input to send to the server.
   fix $ \loop -> do
     msg <- getLine
-    cursorUpLine 1
-    clearLine
+    -- cursorUpLine 1
+    -- clearLine
     sendAll serverSock $ C.pack msg
     unless (msg == ":q") loop
 

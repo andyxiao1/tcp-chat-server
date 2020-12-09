@@ -203,14 +203,26 @@ sendRoomMessage state usr roomName msg = do
           return []
 
 sendThreadMessage :: ServerState -> User -> RoomName -> MessageContent -> STM [Response]
-sendThreadMessage state usr roomName msg = do
+sendThreadMessage state usr _ msg = do
+  (roomStore, threadStore, userStore) <- readTVar state
+  case Map.lookup (M usr msg) threadStore of
+    Nothing -> return []
+    Just (T pr tm tu tc) -> do
+      let message = M usr msg
+      let newThread = T pr (tm ++ [TM message]) tu tc
+          newThreadStore = Map.insert message newThread threadStore
+      -- create a new thread
+      writeTChan tc message
+      writeTVar state (roomStore, newThreadStore, userStore)
+      return []
+
+sendMessage :: ServerState -> User -> RoomName -> MessageContent -> STM [Response]
+sendMessage state usr rn msg = do
   (_, _, userStore) <- readTVar state
   case Map.lookup usr userStore of
+    Just (_, Room _) -> sendRoomMessage state usr rn msg
+    Just (_, Thread _) -> sendThreadMessage state usr rn msg
     Nothing -> return []
-    Just (channel, _) -> do
-      -- create a new thread
-      writeTChan channel (M usr msg)
-      return []
 
 getRoomMessage :: ServerState -> RoomName -> Int -> STM [RoomMessage]
 getRoomMessage state r i = do
@@ -243,7 +255,7 @@ handleInput state usr msg = do
       -- unknown command
       _ -> return []
     -- send message to room
-    message -> sendThreadMessage state usr roomName message
+    message -> sendMessage state usr roomName message
 
 -- | Takes in ip address and creates + sets up the socket that listens for new connections.
 setupConnSocket :: HostName -> IO Socket
