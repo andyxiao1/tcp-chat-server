@@ -4,7 +4,6 @@ import Control.Concurrent
 import Control.Monad (forever, unless)
 import Control.Monad.Fix (fix)
 import qualified Data.ByteString.Char8 as C
-import qualified Data.Text as T
 import Network.Socket
 import Network.Socket.ByteString (recv, sendAll)
 import System.Console.ANSI

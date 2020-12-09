@@ -50,6 +50,13 @@ emptyStore = (Map.empty, Map.empty)
 -- Function Declarations
 -----------------------------
 
+-- TODO: make the other functions pure functions and use something like this to wrap it into the STM Monad
+-- TODO: this will make it so we can test the other functions we might need to return a roomstore/userstore and write? or have multiple different wrapper functions
+stmWrapper :: ServerState -> ((RoomStore, UserStore) -> [String]) -> STM [String]
+stmWrapper state pureFn = do
+  store <- readTVar state
+  return $ pureFn store
+
 getAllRooms :: ServerState -> STM [RoomName]
 getAllRooms state = do
   (roomStore, _) <- readTVar state
