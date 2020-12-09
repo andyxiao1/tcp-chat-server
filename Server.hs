@@ -32,19 +32,42 @@ type Response = String
 
 type RoomStore = Map RoomName Room
 
-type UserStore = Map User (TChan Message, RoomName)
+type ThreadStore = Map Msg Thread
 
-type ServerState = TVar (RoomStore, UserStore)
+type UserStore = Map User (TChan Msg, Location)
 
-data Room = R {name :: String, messages :: [Message], users :: [User], channel :: TChan Message}
+type ServerState = TVar (RoomStore, ThreadStore, UserStore)
 
-data Message = M {sender :: User, content :: String} deriving (Eq)
+data Location
+  = Room Room
+  | Thread Thread
 
-instance Show Message where
+data Room = R {name :: String, messages :: [RoomMessage], users :: [User], channel :: TChan Msg}
+
+data Thread = T
+  { proom :: RoomName,
+    tmessages :: [ThreadMessage],
+    tusers :: [User],
+    tchannel :: TChan Msg
+  }
+
+newtype ThreadMessage = TM {tmessage :: Msg} deriving (Eq)
+
+data RoomMessage = RM {message :: Msg, thread :: Thread}
+
+data Msg = M {sender :: User, content :: MessageContent} deriving (Eq, Ord)
+
+instance Show ThreadMessage where
+  show tm = sender (tmessage tm) ++ ": " ++ content (tmessage tm)
+
+instance Show RoomMessage where
+  show rm = sender (message rm) ++ ": " ++ content (message rm)
+
+instance Show Msg where
   show msg = sender msg ++ ": " ++ content msg
 
-emptyStore :: (RoomStore, UserStore)
-emptyStore = (Map.empty, Map.empty)
+emptyStore :: (RoomStore, ThreadStore, UserStore)
+emptyStore = (Map.empty, Map.empty, Map.empty)
 
 -----------------------------
 -- Function Declarations
@@ -52,56 +75,87 @@ emptyStore = (Map.empty, Map.empty)
 
 -- TODO: make the other functions pure functions and use something like this to wrap it into the STM Monad
 -- TODO: this will make it so we can test the other functions we might need to return a roomstore/userstore and write? or have multiple different wrapper functions
-stmWrapper :: ServerState -> ((RoomStore, UserStore) -> [String]) -> STM [String]
+stmWrapper :: ServerState -> ((RoomStore, ThreadStore, UserStore) -> [String]) -> STM [String]
 stmWrapper state pureFn = do
   store <- readTVar state
   return $ pureFn store
 
 getAllRooms :: ServerState -> STM [RoomName]
 getAllRooms state = do
-  (roomStore, _) <- readTVar state
+  (roomStore, _, _) <- readTVar state
   return $ Map.keys roomStore
 
 getAllRoomMessages :: ServerState -> RoomName -> STM [String]
 getAllRoomMessages state room = do
-  (roomStore, _) <- readTVar state
+  (roomStore, _, _) <- readTVar state
   return $ maybe [] (fmap show . messages) (Map.lookup room roomStore)
 
-getUserChannel :: ServerState -> User -> STM (TChan Message)
+getAllThreadMessages :: ServerState -> RoomName -> Msg -> STM [String]
+getAllThreadMessages state room msg = do
+  (roomStore, threadStore, _) <- readTVar state
+  case Map.lookup room roomStore of
+    Just _ -> return $ threadParent msg threadStore
+    Nothing -> return []
+  where
+    threadParent :: Msg -> ThreadStore -> [String]
+    threadParent msg ts = do
+      case Map.lookup msg ts of
+        Just t -> return (show (tmessages t))
+        Nothing -> return []
+
+-- return $ maybe [] (fmap show . tmessages) (Map.lookup msg ts)
+
+getUserChannel :: ServerState -> User -> STM (TChan Msg)
 getUserChannel state user = do
-  (_, userStore) <- readTVar state
+  (_, _, userStore) <- readTVar state
   case Map.lookup user userStore of
     Nothing -> error $ "error: " ++ user ++ " has no channel."
     Just (tchan, _) -> return tchan
 
 getUserRoom :: ServerState -> User -> STM RoomName
 getUserRoom state user = do
-  (_, userStore) <- readTVar state
+  (_, _, userStore) <- readTVar state
   case Map.lookup user userStore of
     Nothing -> error $ "error: " ++ user ++ " has no channel."
-    Just (_, room) -> return room
+    Just (_, loc) ->
+      case loc of
+        Room r -> return $ name r
+        Thread t -> return $ proom t
 
 createRoom :: ServerState -> RoomName -> STM [Response]
 createRoom state roomName = do
-  (roomStore, userStore) <- readTVar state
+  (roomStore, threadStore, userStore) <- readTVar state
   -- TODO: check if room already exists + chan is a memory leak because nothing reads it.
   tchan <- newTChan
   let newRoom = R roomName [] [] tchan
-  writeTVar state (Map.insert roomName newRoom roomStore, userStore)
+  writeTVar state (Map.insert roomName newRoom roomStore, threadStore, userStore)
   return []
+
+createThread :: ServerState -> RoomName -> Msg -> STM [Response]
+createThread state roomName roomMessage = do
+  (roomStore, threadStore, userStore) <- readTVar state
+
+  case Map.lookup roomMessage threadStore of
+    Just t -> return []
+    Nothing -> do
+      tchan <- newTChan
+      let newThread = T roomName [] [] tchan
+      writeTVar state (roomStore, Map.insert roomMessage newThread threadStore, userStore)
+      return []
 
 -- | Add user to room user list and set the user's channel to a duplicate of the rooms channel.
 -- TODO: check if room doesn't exists or if user is already in room (maybe don't need).
 addUserToRoom :: ServerState -> User -> RoomName -> STM [Response]
 addUserToRoom state usr roomName = do
-  (roomStore, userStore) <- readTVar state
+  (roomStore, threadStore, userStore) <- readTVar state
   case Map.lookup roomName roomStore of
     Nothing -> return []
     Just room -> do
       commLine <- dupTChan $ channel room
-      let newRoomStore = Map.insert roomName (updateRoom room) roomStore
-          newUserStore = Map.insert usr (commLine, roomName) userStore
-      writeTVar state (newRoomStore, newUserStore)
+      let newRoom = updateRoom room
+          newRoomStore = Map.insert roomName newRoom roomStore
+          newUserStore = Map.insert usr (commLine, Room newRoom) userStore
+      writeTVar state (newRoomStore, threadStore, newUserStore)
       getAllRoomMessages state roomName
   where
     updateRoom rm@(R name messages users channel) =
@@ -109,20 +163,63 @@ addUserToRoom state usr roomName = do
         then rm
         else R name messages (usr : users) channel
 
+addUserToThread :: ServerState -> User -> RoomName -> Msg -> STM [Response]
+addUserToThread state usr roomName rm = do
+  (roomStore, threadStore, userStore) <- readTVar state
+  case Map.lookup rm threadStore of
+    Nothing -> return []
+    Just thread -> do
+      commLine <- dupTChan $ tchannel thread
+      let newThread = updateThread thread
+          newThreadStore = Map.insert rm newThread threadStore
+          newUserStore = Map.insert usr (commLine, Thread newThread) userStore
+      writeTVar state (roomStore, newThreadStore, newUserStore)
+      getAllThreadMessages state roomName rm
+  where
+    updateThread t@(T pr tm tu tc) =
+      if usr `elem` tu
+        then t
+        else T pr tm (usr : tu) tc
+
 -- | Add message to room message list and room channel.
 -- TODO this function should also send messages to the connections associated with users
 sendRoomMessage :: ServerState -> User -> RoomName -> MessageContent -> STM [Response]
 sendRoomMessage state usr roomName msg = do
-  (roomStore, userStore) <- readTVar state
+  (roomStore, _, _) <- readTVar state
   case Map.lookup roomName roomStore of
     Nothing -> return []
     Just (R name messages users channel) -> do
+      -- create a new thread
       let message = M usr msg
-          newRoom = R name (messages ++ [message]) users channel
-          newRoomStore = Map.insert roomName newRoom roomStore
-      writeTChan channel message
-      writeTVar state (newRoomStore, userStore)
+      createThread state roomName message
+      (roomStore, threadStore, userStore) <- readTVar state
+      case Map.lookup message threadStore of
+        Nothing -> return []
+        Just t -> do
+          let newRoom = R name (messages ++ [RM message t]) users channel
+              newRoomStore = Map.insert roomName newRoom roomStore
+          writeTChan channel message
+          writeTVar state (newRoomStore, threadStore, userStore)
+          return []
+
+sendThreadMessage :: ServerState -> User -> RoomName -> MessageContent -> STM [Response]
+sendThreadMessage state usr roomName msg = do
+  (_, _, userStore) <- readTVar state
+  case Map.lookup usr userStore of
+    Nothing -> return []
+    Just (channel, _) -> do
+      -- create a new thread
+      writeTChan channel (M usr msg)
       return []
+
+getRoomMessage :: ServerState -> RoomName -> Int -> STM [RoomMessage]
+getRoomMessage state r i = do
+  (roomStore, _, _) <- readTVar state
+  case Map.lookup r roomStore of
+    Nothing -> return []
+    Just (R _ messages _ _) -> do
+      let idx = length messages - i - 1
+      return [messages !! idx]
 
 -- | Handles client input.
 handleInput :: ServerState -> User -> MessageContent -> STM [Response]
@@ -135,12 +232,18 @@ handleInput state usr msg = do
       -- switch room
       -- 's' : ' ' : rm -> switchUserBetweenRooms state usr roomName rm
       's' : ' ' : rm -> addUserToRoom state usr rm -- TODO: temporary replace after implementing `switchUserBetweenRooms`
+      't' : ' ' : i -> do
+        roomMessage <- getRoomMessage state roomName (read i)
+        let msg = message (head roomMessage)
+        addUserToThread state usr roomName msg
+      -- handle case of b
+      -- 'b' -> return []
       -- see all rooms
       "g" -> getAllRooms state
       -- unknown command
       _ -> return []
     -- send message to room
-    message -> sendRoomMessage state usr roomName message
+    message -> sendThreadMessage state usr roomName message
 
 -- | Takes in ip address and creates + sets up the socket that listens for new connections.
 setupConnSocket :: HostName -> IO Socket
@@ -221,6 +324,16 @@ clientLoop clientSock clientAddr state = do
     case msg of
       ":q" -> sendMsg "Bye!"
       ':' : 's' : _ -> do
+        sendMsg "clear"
+        responses <- atomically $ handleInput state user msg
+        sendResponses user responses
+        loop
+      ':' : 't' : _ -> do
+        sendMsg "clear"
+        responses <- atomically $ handleInput state user msg
+        sendResponses user responses
+        loop
+      ':' : 'b' : _ -> do
         sendMsg "clear"
         responses <- atomically $ handleInput state user msg
         sendResponses user responses

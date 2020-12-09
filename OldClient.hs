@@ -150,7 +150,7 @@ clientLoop serverSock = do
   fix $ \loop -> do
     msg <- getLine
     sendAll serverSock $ C.pack msg
-    unless (msg == "q") loop
+    unless (msg == ":q") loop
 
   killThread reader
 
