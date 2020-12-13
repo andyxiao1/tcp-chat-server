@@ -125,11 +125,15 @@ getUserRoom state user = do
 createRoom :: ServerState -> RoomName -> STM [Response]
 createRoom state roomName = do
   (roomStore, threadStore, userStore) <- readTVar state
-  -- TODO: check if room already exists + chan is a memory leak because nothing reads it.
-  tchan <- newTChan
-  let newRoom = R roomName [] [] tchan
-  writeTVar state (Map.insert roomName newRoom roomStore, threadStore, userStore)
-  return []
+  case Map.lookup roomName roomStore of
+    Nothing -> do
+      tchan <- newTChan
+      let newRoom = R roomName [] [] tchan
+      writeTVar state (Map.insert roomName newRoom roomStore, threadStore, userStore)
+      return ["New room created!"]
+    Just _ -> return ["Room already exists"]
+
+-- TODO: check if room already exists + chan is a memory leak because nothing reads it.
 
 createThread :: ServerState -> RoomName -> Msg -> STM [Response]
 createThread state roomName roomMessage = do
