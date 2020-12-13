@@ -4,6 +4,7 @@ import Control.Concurrent
 import Control.Monad (forever, unless)
 import Control.Monad.Fix (fix)
 import qualified Data.ByteString.Char8 as C
+import Data.List (isPrefixOf)
 import Network.Socket
 import Network.Socket.ByteString (recv, sendAll)
 import System.Console.ANSI
@@ -62,19 +63,17 @@ clientLoop serverSock = do
   reader <- forkIO $
     forever $ do
       nextLine <- recv serverSock 1024
-      case C.unpack nextLine of
-        -- clear screen if switching rooms
-        "clear" -> do
+      if "clear" `isPrefixOf` C.unpack nextLine
+        then do
           clearScreen
-          rminfo <- recv serverSock 1024
-          C.putStrLn rminfo
-        _ -> C.putStrLn nextLine
+          C.putStrLn (C.pack (drop 5 (C.unpack nextLine)))
+        else C.putStrLn nextLine
 
   -- Thread to listen for user input to send to the server.
   fix $ \loop -> do
     msg <- getLine
-    -- cursorUpLine 1
-    -- clearLine
+    cursorUpLine 1
+    clearLine
     sendAll serverSock $ C.pack msg
     unless (msg == ":q") loop
 

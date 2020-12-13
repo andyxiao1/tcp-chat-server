@@ -5,7 +5,6 @@ import Control.Concurrent.STM
 import Control.Monad (forever, unless)
 import Control.Monad.Fix (fix)
 import qualified Data.ByteString.Char8 as C
-import Data.List (isPrefixOf)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import qualified Data.Text as T
