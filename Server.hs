@@ -182,6 +182,14 @@ addUserToThread state usr roomName rm = do
         then t
         else T pr pm tm (usr : tu) tc
 
+exitThread :: ServerState -> User -> RoomName -> STM [Response]
+exitThread state usr rn = do
+  (_, _, userStore) <- readTVar state
+  case Map.lookup usr userStore of
+    Nothing -> return []
+    Just (_, Room _) -> return []
+    Just (_, Thread _) -> addUserToRoom state usr rn
+
 -- | Add message to room message list and room channel.
 -- TODO this function should also send messages to the connections associated with users
 sendRoomMessage :: ServerState -> User -> RoomName -> MessageContent -> STM [Response]
@@ -255,7 +263,7 @@ handleInput state usr msg = do
         let msg = message (head roomMessage)
         addUserToThread state usr roomName msg
       -- handle case of b
-      -- 'b' -> return []
+      "b" -> exitThread state usr roomName
       -- see all rooms
       "g" -> getAllRooms state
       -- unknown command
