@@ -46,6 +46,7 @@ data Room = R {name :: String, messages :: [RoomMessage], users :: [User], chann
 
 data Thread = T
   { proom :: RoomName,
+    pmsg :: Msg,
     tmessages :: [ThreadMessage],
     tusers :: [User],
     tchannel :: TChan Msg
@@ -98,10 +99,7 @@ getAllThreadMessages state room msg = do
     Nothing -> return []
   where
     threadParent :: Msg -> ThreadStore -> [String]
-    threadParent msg ts = do
-      case Map.lookup msg ts of
-        Just t -> return (show (tmessages t))
-        Nothing -> return []
+    threadParent msg ts = maybe [] (fmap show . tmessages) (Map.lookup msg ts)
 
 -- return $ maybe [] (fmap show . tmessages) (Map.lookup msg ts)
 
@@ -140,12 +138,12 @@ createThread state roomName roomMessage = do
   (roomStore, threadStore, userStore) <- readTVar state
 
   case Map.lookup roomMessage threadStore of
-    Just t -> return []
+    Just _ -> return ["Thread already exists"]
     Nothing -> do
       tchan <- newTChan
-      let newThread = T roomName [] [] tchan
+      let newThread = T roomName roomMessage [] [] tchan
       writeTVar state (roomStore, Map.insert roomMessage newThread threadStore, userStore)
-      return []
+      return ["New thread created"]
 
 -- | Add user to room user list and set the user's channel to a duplicate of the rooms channel.
 -- TODO: check if room doesn't exists or if user is already in room (maybe don't need).
@@ -180,10 +178,10 @@ addUserToThread state usr roomName rm = do
       writeTVar state (roomStore, newThreadStore, newUserStore)
       getAllThreadMessages state roomName rm
   where
-    updateThread t@(T pr tm tu tc) =
+    updateThread t@(T pr pm tm tu tc) =
       if usr `elem` tu
         then t
-        else T pr tm (usr : tu) tc
+        else T pr pm tm (usr : tu) tc
 
 -- | Add message to room message list and room channel.
 -- TODO this function should also send messages to the connections associated with users
@@ -209,16 +207,21 @@ sendRoomMessage state usr roomName msg = do
 sendThreadMessage :: ServerState -> User -> RoomName -> MessageContent -> STM [Response]
 sendThreadMessage state usr _ msg = do
   (roomStore, threadStore, userStore) <- readTVar state
-  case Map.lookup (M usr msg) threadStore of
-    Nothing -> return []
-    Just (T pr tm tu tc) -> do
-      let message = M usr msg
-      let newThread = T pr (tm ++ [TM message]) tu tc
-          newThreadStore = Map.insert message newThread threadStore
-      -- create a new thread
-      writeTChan tc message
-      writeTVar state (roomStore, newThreadStore, userStore)
-      return []
+  -- only called if user has a thread
+  case Map.lookup usr userStore of
+    Nothing -> return [] -- this should not be possible
+    Just (_, Thread t) -> do
+      case Map.lookup (pmsg t) threadStore of
+        Nothing -> return []
+        Just (T pr pm tm tu tc) -> do
+          let message = M usr msg
+          let newThread = T pr pm (tm ++ [TM message]) tu tc
+              newThreadStore = Map.insert (pmsg t) newThread threadStore
+          -- create a new thread
+          writeTChan tc message
+          writeTVar state (roomStore, newThreadStore, userStore)
+          return []
+    Just _ -> return []
 
 sendMessage :: ServerState -> User -> RoomName -> MessageContent -> STM [Response]
 sendMessage state usr rn msg = do
