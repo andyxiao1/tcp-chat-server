@@ -285,6 +285,7 @@ setupConnSocket ip = do
       return sock
 
 -- | Loop that waits for new connection requests and spawns a new thread for each new connection.
+-- TODO gracefully exit out of server
 connLoop :: Socket -> ServerState -> IO ()
 connLoop connSock state = forever $ do
   (clientSock, clientAddr) <- accept connSock
@@ -294,17 +295,17 @@ connLoop connSock state = forever $ do
 clientLoop :: Socket -> SockAddr -> ServerState -> IO ()
 clientLoop clientSock clientAddr state = do
   putStrLn $ "Connected to client: " ++ show clientAddr
-  let sendMsg msg = sendAll clientSock $ C.pack msg
-      recvMsg = do
+  let sendMsg msg =
+        putStrLn ("sending message: " ++ msg)
+          >> sendAll clientSock (C.pack msg)
+  let recvMsg = do
         byteStr <- recv clientSock 1024
+        putStrLn ("received message: " ++ C.unpack byteStr)
         return $ C.unpack byteStr
       sendResponses _ [] = return ()
       sendResponses user (resp : xs) = do
-        if user `isPrefixOf` resp
-          then sendResponses user xs
-          else do
-            sendMsg $ resp ++ "\n"
-            sendResponses user xs
+        sendMsg $ resp ++ "\n"
+        sendResponses user xs
 
   -- Get user name.
   sendMsg "What is your name?"
