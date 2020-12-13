@@ -385,19 +385,19 @@ main = do
   atomically $ createRoom state "base"
   connLoop connSocket state
 
--- TODO: Create `Action` parser. Maybe we don't need anymore?
--- data Action
---   = GetAllRooms
---   | GetAllRoomMessages RoomName
---   | CreateRoom RoomName
---   | -- | DeleteRoom RoomName
---     AddUserToRoom User RoomName
---   | SwitchUserBetweenRooms User RoomName RoomName
---   | SendRoomMessage User RoomName MessageContent
---   deriving (Eq, Show)
--- actionParser :: Parser Action
-
 -----------------------------
 -- Test Cases
 -----------------------------
 -- TODO: Add test cases.
+
+-- Tests to verify TVar update for
+
+-- Adding users to room (initially)
+
+-- Switching users to other rooms
+
+-- Adding users to threads
+
+-- Sending users back to the same room
+
+-- Sending messages in rooms
