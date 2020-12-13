@@ -11,12 +11,6 @@ import qualified Data.Text as T
 import Network.Socket
 import Network.Socket.ByteString (recv, sendAll)
 
--- import ParserCombinators (Parser)
--- import qualified ParserCombinators as P
--- import Text.PrettyPrint (Doc)
--- import qualified Text.PrettyPrint as PP
--- import qualified Data.Time.Clock as Clock
-
 -----------------------------
 -- Type Definitions (Model)
 -----------------------------
@@ -384,20 +378,3 @@ main = do
   state <- newTVarIO emptyStore
   atomically $ createRoom state "base"
   connLoop connSocket state
-
------------------------------
--- Test Cases
------------------------------
--- TODO: Add test cases.
-
--- Tests to verify TVar update for
-
--- Adding users to room (initially)
-
--- Switching users to other rooms
-
--- Adding users to threads
-
--- Sending users back to the same room
-
--- Sending messages in rooms
