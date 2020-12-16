@@ -160,3 +160,35 @@ main = do
   host <- getLine
   serverSock <- setupServerSocket host "5000"
   clientLoop serverSock
+
+clientLoop :: Socket -> IO ()
+clientLoop serverSock = do
+  -- Thread for listening to messages from the server.
+  reader <- forkIO $
+    forever $ do
+      nextLine <- recv serverSock 1024
+      if "clear" `isPrefixOf` C8.unpack nextLine
+        then do
+          clearScreen
+          C8.putStrLn (C8.pack (drop 5 (C8.unpack nextLine)))
+        else C8.putStrLn nextLine
+
+  -- void $ defaultMain app exampleState
+  -- Thread to listen for user input to send to the server.
+  fix $ \loop -> do
+    msg <- getLine
+    cursorUpLine 1
+    clearLine
+    sendAll serverSock $ C8.pack msg
+    unless (msg == ":q") loop
+
+-- data Action
+--   = GetAllRooms
+--   | GetAllRoomMessages RoomName
+--   | CreateRoom RoomName
+--   | -- | DeleteRoom RoomName
+--     AddUserToRoom Username RoomName
+--   | SwitchUserBetweenRooms Username RoomName RoomName
+--   | SendRoomMessage Username RoomName MessageContent
+--   | Quit
+--   deriving (Eq, Show)

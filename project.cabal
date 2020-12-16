@@ -24,5 +24,8 @@ library
                      , bytestring >= 0.10.10.0
                      , stm>=2.5.0.0
                      , ansi-terminal
+                     , brick
+                     , vty
+                     , microlens-platform
   default-language:    Haskell2010
   ghc-options:         -Wincomplete-patterns -Wno-orphans -Wno-unused-imports

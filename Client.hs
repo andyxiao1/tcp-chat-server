@@ -1,43 +1,31 @@
 module Client where
 
-import Control.Concurrent
-import Control.Monad (forever, unless)
+import Control.Concurrent (ThreadId, forkIO, killThread)
+import Control.Monad (forever, unless, void)
 import Control.Monad.Fix (fix)
-import qualified Data.ByteString.Char8 as C
-import Data.List (isPrefixOf)
+import Data.ByteString.Char8 (unpack)
+import qualified Data.ByteString.Char8 as C8
+import qualified Graphics.Vty as V
+import Lens.Micro.Platform (makeLenses, (^.))
 import Network.Socket
+  ( AddrInfo (addrAddress, addrFamily, addrProtocol, addrSocketType),
+    HostName,
+    ServiceName,
+    Socket,
+    SocketType (Stream),
+    connect,
+    defaultHints,
+    getAddrInfo,
+    socket,
+  )
 import Network.Socket.ByteString (recv, sendAll)
-import System.Console.ANSI
-import System.IO
+import TUI (BChan, ServerResponse (..), app, customMain, initState, newBChan, writeBChan)
 
 -----------------------------
--- Function Declarations
+-- Network Functions
 -----------------------------
 
--- print connection results
-type Username = String
-
-type Port = String
-
-type IPv4 = String
-
-type RoomName = String
-
-type User = String
-
-type MessageContent = String
-
-data Action
-  = GetAllRooms
-  | GetAllRoomMessages RoomName
-  | CreateRoom RoomName
-  | -- | DeleteRoom RoomName
-    AddUserToRoom Username RoomName
-  | SwitchUserBetweenRooms Username RoomName RoomName
-  | SendRoomMessage Username RoomName MessageContent
-  | Quit
-  deriving (Eq, Show)
-
+-- | Creates socket connection to server.
 setupServerSocket :: HostName -> ServiceName -> IO Socket
 setupServerSocket host port = do
   putStrLn "Opening connection to server..."
@@ -57,31 +45,41 @@ setupServerSocket host port = do
       connect sock $ addrAddress addr
       return sock
 
-clientLoop :: Socket -> IO ()
-clientLoop serverSock = do
-  -- Thread for listening to messages from the server.
-  reader <- forkIO $
+-- | Spawns thread to listen to network messages.
+startNetworkListener :: Socket -> BChan ServerResponse -> IO ThreadId
+startNetworkListener serverSock chan =
+  forkIO $
     forever $ do
       nextLine <- recv serverSock 1024
-      if "clear" `isPrefixOf` C.unpack nextLine
-        then do
-          clearScreen
-          C.putStrLn (C.pack (drop 5 (C.unpack nextLine)))
-        else C.putStrLn nextLine
+      writeBChan chan $ SR (unpack nextLine)
 
-  -- Thread to listen for user input to send to the server.
-  fix $ \loop -> do
-    msg <- getLine
-    cursorUpLine 1
-    clearLine
-    sendAll serverSock $ C.pack msg
-    unless (msg == ":q") loop
+-----------------------------
+-- Main
+-----------------------------
 
-  killThread reader
-
+-- | Runs client application.
 main :: IO ()
 main = do
+  -- Get initial user input.
+  putStrLn "What is your name?"
+  name <- getLine
   putStrLn "What is the server host name?"
   host <- getLine
+
+  -- Setup Socket + TUI.
   serverSock <- setupServerSocket host "5000"
-  clientLoop serverSock
+  chan <- newBChan 10
+  let buildVty = V.mkVty V.defaultConfig
+  initialVty <- buildVty
+
+  -- Start network listener thread.
+  listenerID <- startNetworkListener serverSock chan
+
+  -- Send initial data to server.
+  sendAll serverSock $ C8.pack name
+
+  -- Start TUI thread.
+  customMain initialVty buildVty (Just chan) app $ initState name serverSock
+
+  -- Cleanup.
+  killThread listenerID

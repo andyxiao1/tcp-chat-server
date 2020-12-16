@@ -316,15 +316,8 @@ clientLoop clientSock clientAddr state = do
         sendResponses user xs
 
   -- Get user name.
-  sendMsg "What is your name?"
   user <- recvMsg
-
-  -- Ask user to join room initially.
-  sendMsg "What room would you like to join?"
-  room <- recvMsg
-
-  -- clear the client's screen
-  sendMsg "clear"
+  let room = "base"
 
   responses <- atomically $ addUserToRoom state user room
   sendResponses user responses
