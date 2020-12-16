@@ -43,7 +43,7 @@ type User = String
 
 type MessageContent = String
 
-newtype ServerResponse = SR String
+data ServerResponse = SR String | Tick
 
 data ClientState = CS
   { rooms :: [RoomName],
@@ -96,7 +96,7 @@ handleEvent :: ClientState -> BrickEvent Name ServerResponse -> EventM Name (Nex
 -- Key Press Events.
 handleEvent cs (VtyEvent (V.EvKey V.KEsc [])) = halt cs
 handleEvent cs@(CS rooms messages user input sock) (VtyEvent (V.EvKey V.KEnter [])) = do
-  let msg = show $ formState input ^. message
+  let msg = T.unpack $ formState input ^. message
   if null msg
     then continue cs
     else do
@@ -104,10 +104,19 @@ handleEvent cs@(CS rooms messages user input sock) (VtyEvent (V.EvKey V.KEnter [
         sendAll sock $ C8.pack msg
         return $ CS rooms messages user (mkForm initUserInfo) sock
 -- Network Listener Events.
-handleEvent (CS rooms messages user input sock) (AppEvent (SR resp)) =
-  if resp == "clear"
-    then continue $ CS rooms [] user input sock
-    else continue $ CS rooms (resp : messages) user input sock
+handleEvent (CS rooms messages user input sock) (AppEvent (SR resp))
+  | "clear" `isPrefixOf` resp = do
+    let remainingMsg = T.unpack $ T.strip $ T.pack $ drop 5 resp
+        newMessages = ([remainingMsg | not (null remainingMsg)])
+    continue $ CS rooms newMessages user input sock
+  | "rooms" `isPrefixOf` resp = do
+    let rooms = T.unpack $ T.strip $ T.pack $ drop 5 resp
+    continue $ CS [rooms] messages user input sock
+  | otherwise = continue $ CS rooms (resp : messages) user input sock
+handleEvent cs (AppEvent Tick) =
+  suspendAndResume $ do
+    sendAll (sock cs) $ C8.pack ":gg"
+    return cs
 -- Form Events.
 handleEvent (CS rooms messages user input sock) ev = do
   newInput <- handleFormEvent ev input

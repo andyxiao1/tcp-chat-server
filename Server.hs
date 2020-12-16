@@ -4,7 +4,7 @@ import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Monad (forever, unless)
 import Control.Monad.Fix (fix)
-import qualified Data.ByteString.Char8 as C
+import qualified Data.ByteString.Char8 as C8
 import Data.Map (Map)
 import qualified Data.Map as Map
 import qualified Data.Text as T
@@ -12,7 +12,7 @@ import Network.Socket
 import Network.Socket.ByteString (recv, sendAll)
 
 -----------------------------
--- Type Definitions (Model)
+-- Type Definitions
 -----------------------------
 
 type RoomName = String
@@ -35,7 +35,12 @@ data Location
   = Room Room
   | Thread Thread
 
-data Room = R {name :: String, messages :: [RoomMessage], users :: [User], channel :: TChan Msg}
+data Room = R
+  { name :: String,
+    messages :: [RoomMessage],
+    users :: [User],
+    channel :: TChan Msg
+  }
 
 data Thread = T
   { proom :: RoomName,
@@ -63,12 +68,13 @@ instance Show Msg where
 emptyStore :: (RoomStore, ThreadStore, UserStore)
 emptyStore = (Map.empty, Map.empty, Map.empty)
 
+divider :: String
+divider = "================================"
+
 -----------------------------
--- Function Declarations
+-- State Logic Functions
 -----------------------------
 
--- TODO: make the other functions pure functions and use something like this to wrap it into the STM Monad
--- TODO: this will make it so we can test the other functions we might need to return a roomstore/userstore and write? or have multiple different wrapper functions
 stmWrapper :: ServerState -> ((RoomStore, ThreadStore, UserStore) -> [String]) -> STM [String]
 stmWrapper state pureFn = do
   store <- readTVar state
@@ -124,8 +130,6 @@ createRoom state roomName = do
       return ["New room created!"]
     Just _ -> return ["Room already exists"]
 
--- TODO: check if room already exists + chan is a memory leak because nothing reads it.
-
 createThread :: ServerState -> RoomName -> Msg -> STM [Response]
 createThread state roomName roomMessage = do
   (roomStore, threadStore, userStore) <- readTVar state
@@ -139,7 +143,6 @@ createThread state roomName roomMessage = do
       return ["New thread created"]
 
 -- | Add user to room user list and set the user's channel to a duplicate of the rooms channel.
--- TODO: check if room doesn't exists or if user is already in room (maybe don't need).
 addUserToRoom :: ServerState -> User -> RoomName -> STM [Response]
 addUserToRoom state usr roomName = do
   (roomStore, threadStore, userStore) <- readTVar state
@@ -185,7 +188,6 @@ exitThread state usr rn = do
     Just (_, Thread _) -> addUserToRoom state usr rn
 
 -- | Add message to room message list and room channel.
--- TODO this function should also send messages to the connections associated with users
 sendRoomMessage :: ServerState -> User -> RoomName -> MessageContent -> STM [Response]
 sendRoomMessage state usr roomName msg = do
   (roomStore, _, _) <- readTVar state
@@ -241,29 +243,9 @@ getRoomMessage state r i = do
       let idx = length messages - i - 1
       return [messages !! idx]
 
--- | Handles client input.
-handleInput :: ServerState -> User -> MessageContent -> STM [Response]
-handleInput state usr msg = do
-  roomName <- getUserRoom state usr
-  case T.unpack (T.strip (T.pack msg)) of
-    ':' : command -> case command of
-      -- create room
-      'n' : ' ' : rm -> createRoom state rm
-      -- switch room
-      -- 's' : ' ' : rm -> switchUserBetweenRooms state usr roomName rm
-      's' : ' ' : rm -> addUserToRoom state usr rm -- TODO: temporary replace after implementing `switchUserBetweenRooms`
-      't' : ' ' : i -> do
-        roomMessage <- getRoomMessage state roomName (read i)
-        let msg = message (head roomMessage)
-        addUserToThread state usr roomName msg
-      -- handle case of b
-      "b" -> exitThread state usr roomName
-      -- see all rooms
-      "g" -> getAllRooms state
-      -- unknown command
-      _ -> return []
-    -- send message to room
-    message -> sendMessage state usr roomName message
+-----------------------------
+-- Server Logic Functions
+-----------------------------
 
 -- | Takes in ip address and creates + sets up the socket that listens for new connections.
 setupConnSocket :: HostName -> IO Socket
@@ -293,27 +275,60 @@ setupConnSocket ip = do
       return sock
 
 -- | Loop that waits for new connection requests and spawns a new thread for each new connection.
--- TODO gracefully exit out of server
 connLoop :: Socket -> ServerState -> IO ()
 connLoop connSock state = forever $ do
   (clientSock, clientAddr) <- accept connSock
   forkFinally (clientLoop clientSock clientAddr state) (const $ gracefulClose clientSock 5000)
 
+-- | Handles client input.
+handleInput :: ServerState -> User -> MessageContent -> STM [Response]
+handleInput state usr msg = do
+  roomName <- getUserRoom state usr
+  case T.unpack (T.strip (T.pack msg)) of
+    ':' : command -> case command of
+      -- create room
+      'n' : ' ' : rm -> do
+        responses <- createRoom state rm
+        return $ [divider] ++ responses ++ [divider]
+      -- switch room
+      's' : ' ' : rm -> do
+        responses <- addUserToRoom state usr rm
+        return $ ["clear", divider, "Switched Rooms!", divider] ++ responses
+      -- switch to thread
+      't' : ' ' : i -> do
+        roomMessage <- getRoomMessage state roomName (read i)
+        let msg = message (head roomMessage)
+        responses <- addUserToThread state usr roomName msg
+        return $ ["clear", divider, "Switched to Thread!", divider] ++ responses
+      -- leave thread
+      "b" -> do
+        responses <- exitThread state usr roomName
+        return $ ["clear", divider, "Left Thread!", divider] ++ responses
+      -- get all rooms
+      "g" -> do
+        responses <- getAllRooms state
+        return $ [divider, "Rooms:"] ++ responses ++ [divider]
+      -- special call to get rooms to update room list, therefore it is formatted differently
+      "gg" -> do
+        responses <- getAllRooms state
+        return $ "rooms" : responses
+      -- unknown command
+      _ -> return [divider, "Invalid Command!", divider]
+    -- send message to room
+    message -> sendMessage state usr roomName message
+
 -- | Loop that handles a single client.
 clientLoop :: Socket -> SockAddr -> ServerState -> IO ()
 clientLoop clientSock clientAddr state = do
   putStrLn $ "Connected to client: " ++ show clientAddr
-  let sendMsg msg =
-        putStrLn ("sending message: " ++ msg)
-          >> sendAll clientSock (C.pack msg)
-  let recvMsg = do
+  let sendMsg msg = do
+        -- putStrLn ("sending message: " ++ msg)
+        sendAll clientSock (C8.pack msg)
+      recvMsg = do
         byteStr <- recv clientSock 1024
-        putStrLn ("received message: " ++ C.unpack byteStr)
-        return $ C.unpack byteStr
-      sendResponses _ [] = return ()
-      sendResponses user (resp : xs) = do
-        sendMsg $ resp ++ "\n"
-        sendResponses user xs
+        putStrLn ("received message: " ++ C8.unpack byteStr)
+        return $ C8.unpack byteStr
+      sendResponses user responses = sendMsg $ T.unpack $ T.strip $ T.pack $ unlines responses
 
   -- Get user name.
   user <- recvMsg
@@ -337,37 +352,27 @@ clientLoop clientSock clientAddr state = do
     msg <- recvMsg
     case msg of
       ":q" -> sendMsg "Bye!"
-      ':' : 's' : _ -> do
-        sendMsg "clear"
-        responses <- atomically $ handleInput state user msg
-        sendResponses user responses
-        loop
-      ':' : 't' : _ -> do
-        sendMsg "clear"
-        responses <- atomically $ handleInput state user msg
-        sendResponses user responses
-        loop
-      ':' : 'b' : _ -> do
-        sendMsg "clear"
-        responses <- atomically $ handleInput state user msg
-        sendResponses user responses
-        loop
       _ -> do
         responses <- atomically $ handleInput state user msg
         sendResponses user responses
         loop
 
+  -- Cleanup.
+  gracefulClose clientSock 5000
   killThread reader
-
--- let broadcast msg = writeChan chan msg
--- broadcast ("--> " ++ name ++ " entered chat.")
--- broadcast ("<-- " ++ name ++ " left.")
 
 main :: IO ()
 main = do
+  -- Get initial user input.
   putStrLn "What is your VPN IP address?"
   ip <- getLine
+
+  -- Setup connection listener socket.
   connSocket <- setupConnSocket ip
+
+  -- Initialize state.
   state <- newTVarIO emptyStore
   atomically $ createRoom state "base"
+
+  -- Start main loop.
   connLoop connSocket state

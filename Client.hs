@@ -1,6 +1,6 @@
 module Client where
 
-import Control.Concurrent (ThreadId, forkIO, killThread)
+import Control.Concurrent (ThreadId, forkIO, killThread, threadDelay)
 import Control.Monad (forever, unless, void)
 import Control.Monad.Fix (fix)
 import Data.ByteString.Char8 (unpack)
@@ -53,6 +53,14 @@ startNetworkListener serverSock chan =
       nextLine <- recv serverSock 1024
       writeBChan chan $ SR (unpack nextLine)
 
+-- | Spawns thread to request updated room list every 2 seconds.
+startRoomUpdaterThread :: BChan ServerResponse -> IO ThreadId
+startRoomUpdaterThread chan =
+  forkIO $
+    forever $ do
+      threadDelay 5000000
+      writeBChan chan Tick
+
 -----------------------------
 -- Main
 -----------------------------
@@ -72,8 +80,9 @@ main = do
   let buildVty = V.mkVty V.defaultConfig
   initialVty <- buildVty
 
-  -- Start network listener thread.
+  -- Start network listener thread and thread to get rooms.
   listenerID <- startNetworkListener serverSock chan
+  roomUpdaterID <- startRoomUpdaterThread chan
 
   -- Send initial data to server.
   sendAll serverSock $ C8.pack name
@@ -83,3 +92,4 @@ main = do
 
   -- Cleanup.
   killThread listenerID
+  killThread roomUpdaterID

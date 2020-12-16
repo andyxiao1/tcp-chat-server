@@ -12,7 +12,7 @@ cabal-version:       >=1.10
 
 
 library
-  exposed-modules:     Main, Server, Client, Parser, BaseServer, Tests
+  exposed-modules:     Server, Client, TUI, Tests
   build-depends:       base >=4.13 && <4.14
                      , QuickCheck ==2.13.2
                      , containers >=0.6 && <0.7
@@ -23,7 +23,6 @@ library
                      , text >= 1.2.4.0
                      , bytestring >= 0.10.10.0
                      , stm>=2.5.0.0
-                     , ansi-terminal
                      , brick
                      , vty
                      , microlens-platform
